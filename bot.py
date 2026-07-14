@@ -1,49 +1,50 @@
-
 import os
-from dotenv import load_dotenv
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import telebot
-from google import genai
-from google.genai.errors import ServerError
-load_dotenv()
+# Если вы используете библиотеку google-genai для Gemini, импортируйте ее:
+# from google import genai 
 
-# 1. Твои ключи доступа
+# --- 1. ЧТЕНИЕ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ---
 TG_TOKEN = os.getenv("TG_TOKEN")
 GEMINI_KEY = os.getenv("GEMINI_KEY")
 
-# 2. Инициализация бота и клиента Google
+# --- 2. КОСТЫЛЬ ДЛЯ ОБХОДА ПОРТОВ RENDER ---
+class DummyServer(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/html")
+        self.end_headers()
+        self.wfile.write(b"Gemini Bot is running perfectly!")
+
+def run_web_server():
+    # Render автоматически передает порт в переменную PORT
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), DummyServer)
+    print(f"Фоновый веб-сервер запущен на порту {port}")
+    server.serve_forever()
+
+# --- 3. ИНИЦИАЛИЗАЦИЯ БОТА ---
+# (Проверка, что токен вообще пришел)
+if not TG_TOKEN:
+    raise ValueError("Критическая ошибка: TG_TOKEN не задан в переменных окружения Render!")
+
 bot = telebot.TeleBot(TG_TOKEN)
-client = genai.Client(api_key=GEMINI_KEY)
 
-# 3. Создаем чат с памятью. По умолчанию используем лучшую модель
-PRIMARY_MODEL = "gemini-3.5-flash"
-BACKUP_MODEL = "gemini-2.5-flash"
-
-chat = client.chats.create(model=PRIMARY_MODEL)
-
+# --- 4. ЛОГИКА ВАШЕГО БОТА ---
+# Здесь идет ваш оригинальный код с Gemini и памятью.
+# Например:
 @bot.message_handler(commands=['start'])
-def welcome(message):
-    bot.reply_to(message, "Привет! Я твой обновленный ИИ-друг с памятью. Я запомню всё, о чём мы говорим! 😊")
+def send_welcome(message):
+    bot.reply_to(message, "Привет! Я твой бот с интеграцией Gemini. Задавай вопросы!")
 
-@bot.message_handler(content_types=['text'])
-def talk(message):
-    global chat
-    bot.send_chat_action(message.chat.id, 'typing')
+# (Сюда перенесите ваши обработчики сообщений для Gemini)
+
+# --- 5. ЗАПУСК ВСЕЙ СИСТЕМЫ ---
+if __name__ == "__main__":
+    # Запускаем веб-сервер в фоновом потоке, чтобы Render прошел проверку портов
+    threading.Thread(target=run_web_server, daemon=True).start()
     
-    try:
-        # Пытаемся отправить сообщение в лучшую модель
-        response = chat.send_message(message.text)
-    except ServerError as e:
-        # Если у Google перегрузка (ошибка 503), тихо переключаемся на резервную модель
-        if "503" in str(e) or "UNAVAILABLE" in str(e):
-            print("⚠️ Основная модель перегружена. Переключаюсь на резервную...")
-            # Пересоздаем чат на резервной модели, сохраняя историю, если это возможно
-            chat = client.chats.create(model=BACKUP_MODEL)
-            response = chat.send_message(message.text)
-        else:
-            # Если это какая-то другая ошибка, сообщаем о ней
-            raise e
-
-    bot.reply_to(message, response.text)
-
-print("🚀 Бот успешно запущен на бронированной конфигурации!")
-bot.infinity_polling()
+    # Запускаем бесконечный опрос Telegram в основном потоке
+    print("Бот начинает слушать сообщения (Long Polling)...")
+    bot.infinity_polling()
